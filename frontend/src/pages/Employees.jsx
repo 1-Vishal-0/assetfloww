@@ -6,8 +6,33 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
 import Modal from '../components/Modal';
 import { StatusBadge, formatDateTime, debounce } from '../utils/helpers';
-import { Users, Plus, Pencil, Trash2, History } from 'lucide-react';
+import { Users, Plus, Pencil, Trash2, History, User } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+function EmptyState({ search, onAdd }) {
+  return (
+    <div className="py-16 flex flex-col items-center justify-center gap-4">
+      <div className="w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center">
+        <Users className="w-8 h-8 text-slate-600" />
+      </div>
+      <div className="text-center">
+        <h3 className="text-slate-300 font-semibold">
+          {search ? 'No employees match your search' : 'No employees yet'}
+        </h3>
+        <p className="text-xs text-slate-500 mt-1">
+          {search ? 'Try a different name, email or department.' : 'Add your first employee to start assigning assets.'}
+        </p>
+      </div>
+      {!search && (
+        <button onClick={onAdd} className="btn-primary text-sm">
+          <Plus className="w-4 h-4" /> Add First Employee
+        </button>
+      )}
+    </div>
+  );
+}
+
+const BLANK_FORM = { name: '', email: '', department: '', designation: '', phone: '' };
 
 export default function Employees() {
   const [employees, setEmployees] = useState([]);
@@ -16,13 +41,16 @@ export default function Employees() {
   const [search, setSearch] = useState('');
   const [formModal, setFormModal] = useState(false);
   const [historyModal, setHistoryModal] = useState(false);
+  const [deleteModal, setDeleteModal] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [historyTarget, setHistoryTarget] = useState(null);
   const [historyData, setHistoryData] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', department: '' });
+  const [form, setForm] = useState(BLANK_FORM);
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchEmployees = useCallback(async (s) => {
     setLoading(true); setError('');
@@ -36,16 +64,41 @@ export default function Employees() {
   const debouncedFetch = useRef(debounce((s) => fetchEmployees(s), 400)).current;
   useEffect(() => { debouncedFetch(search); }, [search, debouncedFetch]);
 
-  const openCreate = () => { setEditTarget(null); setForm({ name: '', email: '', department: '' }); setFormErrors({}); setFormModal(true); };
-  const openEdit = (emp) => { setEditTarget(emp); setForm({ name: emp.name, email: emp.email, department: emp.department }); setFormErrors({}); setFormModal(true); };
+  const openCreate = () => {
+    setEditTarget(null);
+    setForm(BLANK_FORM);
+    setFormErrors({});
+    setFormModal(true);
+  };
+
+  const openEdit = (emp) => {
+    setEditTarget(emp);
+    setForm({
+      name: emp.name || emp.full_name || '',
+      email: emp.email || '',
+      department: emp.department || '',
+      designation: emp.designation || '',
+      phone: emp.phone || '',
+    });
+    setFormErrors({});
+    setFormModal(true);
+  };
 
   const openHistory = async (emp) => {
-    setHistoryTarget(emp); setHistoryModal(true); setHistoryData(null); setHistoryLoading(true);
+    setHistoryTarget(emp);
+    setHistoryModal(true);
+    setHistoryData(null);
+    setHistoryLoading(true);
     try {
       const res = await historyAPI.getByEmployee(emp.id);
       setHistoryData(res);
     } catch { toast.error('Failed to load history'); }
     finally { setHistoryLoading(false); }
+  };
+
+  const openDelete = (emp) => {
+    setDeleteTarget(emp);
+    setDeleteModal(true);
   };
 
   const validate = () => {
@@ -75,13 +128,20 @@ export default function Employees() {
     finally { setSubmitting(false); }
   };
 
-  const handleDelete = async (id, name) => {
-    if (!window.confirm(`Delete employee "${name}"?`)) return;
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      await employeeAPI.delete(id);
-      toast.success('Employee deleted');
+      await employeeAPI.delete(deleteTarget.id);
+      toast.success(`"${deleteTarget.name || deleteTarget.full_name}" deleted`);
+      setDeleteModal(false);
+      setDeleteTarget(null);
       fetchEmployees(search);
-    } catch (err) { toast.error(err.message); }
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -89,7 +149,7 @@ export default function Employees() {
       <Navbar title="Employees" subtitle="Manage employee records" />
       <div className="flex-1 p-6 space-y-4 animate-fade-in">
         <div className="flex flex-wrap gap-3 items-center justify-between">
-          <SearchInput value={search} onChange={setSearch} placeholder="Search employees..." className="w-64" />
+          <SearchInput value={search} onChange={setSearch} placeholder="Search by name, email, department..." className="w-72" />
           <button onClick={openCreate} className="btn-primary"><Plus className="w-4 h-4" /> Add Employee</button>
         </div>
 
@@ -98,41 +158,51 @@ export default function Employees() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-800 bg-slate-900/80">
-                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Employee</th>
                   <th className="px-4 py-3">Email</th>
                   <th className="px-4 py-3">Department</th>
+                  <th className="px-4 py-3">Designation</th>
                   <th className="px-4 py-3">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {loading && <tr><td colSpan={4} className="py-12"><LoadingSpinner /></td></tr>}
-                {!loading && error && <tr><td colSpan={4}><ErrorMessage message={error} onRetry={() => fetchEmployees(search)} /></td></tr>}
+                {loading && <tr><td colSpan={5} className="py-12"><LoadingSpinner /></td></tr>}
+                {!loading && error && <tr><td colSpan={5}><ErrorMessage message={error} onRetry={() => fetchEmployees(search)} /></td></tr>}
                 {!loading && !error && employees.length === 0 && (
-                  <tr><td colSpan={4} className="py-12 text-center text-slate-500">No employees found.</td></tr>
+                  <tr><td colSpan={5}><EmptyState search={search} onAdd={openCreate} /></td></tr>
                 )}
                 {!loading && employees.map((emp) => (
                   <tr key={emp.id} className="table-row-hover">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-primary-600/20 border border-primary-500/30 flex items-center justify-center flex-shrink-0">
-                          <span className="text-xs font-bold text-primary-400">{emp.name.charAt(0)}</span>
+                          <span className="text-xs font-bold text-primary-400">
+                            {(emp.name || emp.full_name || '?').charAt(0).toUpperCase()}
+                          </span>
                         </div>
-                        <span className="font-medium text-slate-200">{emp.name}</span>
+                        <div>
+                          <span className="font-medium text-slate-200">{emp.name || emp.full_name}</span>
+                          {emp.employee_code && <p className="text-xs text-slate-600 font-mono">{emp.employee_code}</p>}
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-slate-400">{emp.email}</td>
                     <td className="px-4 py-3">
                       <span className="px-2.5 py-0.5 rounded-full text-xs bg-slate-800 text-slate-300 border border-slate-700">{emp.department}</span>
                     </td>
+                    <td className="px-4 py-3 text-slate-500 text-xs">{emp.designation || '—'}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <button onClick={() => openHistory(emp)} title="View History" className="p-1.5 rounded-lg text-slate-500 hover:text-primary-400 hover:bg-primary-500/10 transition-colors">
+                        <button onClick={() => openHistory(emp)} title="View History"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-primary-400 hover:bg-primary-500/10 transition-colors">
                           <History className="w-4 h-4" />
                         </button>
-                        <button onClick={() => openEdit(emp)} title="Edit" className="p-1.5 rounded-lg text-slate-500 hover:text-amber-400 hover:bg-amber-500/10 transition-colors">
+                        <button onClick={() => openEdit(emp)} title="Edit"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-amber-400 hover:bg-amber-500/10 transition-colors">
                           <Pencil className="w-4 h-4" />
                         </button>
-                        <button onClick={() => handleDelete(emp.id, emp.name)} title="Delete" className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                        <button onClick={() => openDelete(emp)} title="Delete"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -148,39 +218,78 @@ export default function Employees() {
       {/* Add/Edit Modal */}
       <Modal isOpen={formModal} onClose={() => setFormModal(false)} title={editTarget ? 'Edit Employee' : 'Add Employee'}>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="label">Full Name *</label>
-            <input className={`input ${formErrors.name ? 'border-red-500' : ''}`} placeholder="e.g. John Doe" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-            {formErrors.name && <p className="text-xs text-red-400 mt-1">{formErrors.name}</p>}
-          </div>
-          <div>
-            <label className="label">Email *</label>
-            <input type="email" className={`input ${formErrors.email ? 'border-red-500' : ''}`} placeholder="john@company.com" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
-            {formErrors.email && <p className="text-xs text-red-400 mt-1">{formErrors.email}</p>}
-          </div>
-          <div>
-            <label className="label">Department *</label>
-            <input className={`input ${formErrors.department ? 'border-red-500' : ''}`} placeholder="e.g. Engineering" value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} />
-            {formErrors.department && <p className="text-xs text-red-400 mt-1">{formErrors.department}</p>}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
+              <label className="label">Full Name *</label>
+              <input className={`input ${formErrors.name ? 'border-red-500' : ''}`}
+                placeholder="e.g. John Doe" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+              {formErrors.name && <p className="text-xs text-red-400 mt-1">{formErrors.name}</p>}
+            </div>
+            <div>
+              <label className="label">Email *</label>
+              <input type="email" className={`input ${formErrors.email ? 'border-red-500' : ''}`}
+                placeholder="john@company.com" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+              {formErrors.email && <p className="text-xs text-red-400 mt-1">{formErrors.email}</p>}
+            </div>
+            <div>
+              <label className="label">Phone</label>
+              <input className="input" placeholder="+91 9876543210" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">Department *</label>
+              <input className={`input ${formErrors.department ? 'border-red-500' : ''}`}
+                placeholder="e.g. Engineering" value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} />
+              {formErrors.department && <p className="text-xs text-red-400 mt-1">{formErrors.department}</p>}
+            </div>
+            <div>
+              <label className="label">Designation</label>
+              <input className="input" placeholder="e.g. Software Engineer" value={form.designation}
+                onChange={e => setForm({ ...form, designation: e.target.value })} />
+            </div>
           </div>
           <div className="flex gap-3 pt-1">
             <button type="submit" disabled={submitting} className="btn-primary flex-1 justify-center">
-              {submitting ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Users className="w-4 h-4" />}
-              {submitting ? 'Saving...' : editTarget ? 'Update' : 'Create'}
+              {submitting ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <User className="w-4 h-4" />}
+              {submitting ? 'Saving...' : editTarget ? 'Update Employee' : 'Create Employee'}
             </button>
             <button type="button" onClick={() => setFormModal(false)} className="btn-secondary">Cancel</button>
           </div>
         </form>
       </Modal>
 
+      {/* Delete Confirm Modal */}
+      <Modal isOpen={deleteModal} onClose={() => setDeleteModal(false)} title="Delete Employee" size="sm">
+        <div className="space-y-4">
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+            <p className="text-sm text-red-300">This cannot be undone. The employee record will be permanently removed.</p>
+          </div>
+          <p className="text-sm text-slate-300">
+            Delete employee <span className="font-semibold text-slate-100">{deleteTarget?.name || deleteTarget?.full_name}</span>?
+          </p>
+          <p className="text-xs text-slate-500">Employees with active asset allocations cannot be deleted.</p>
+          <div className="flex gap-3">
+            <button onClick={handleDelete} disabled={deleting} className="btn-danger flex-1 justify-center">
+              {deleting ? <span className="w-4 h-4 border-2 border-red-400/30 border-t-red-400 rounded-full animate-spin" /> : <Trash2 className="w-4 h-4" />}
+              {deleting ? 'Deleting...' : 'Delete Employee'}
+            </button>
+            <button onClick={() => setDeleteModal(false)} className="btn-secondary">Cancel</button>
+          </div>
+        </div>
+      </Modal>
+
       {/* History Modal */}
-      <Modal isOpen={historyModal} onClose={() => setHistoryModal(false)} title={`History — ${historyTarget?.name}`} size="xl">
+      <Modal isOpen={historyModal} onClose={() => setHistoryModal(false)} title={`History — ${historyTarget?.name || historyTarget?.full_name}`} size="xl">
         {historyLoading && <LoadingSpinner />}
         {!historyLoading && historyData && (
           <div className="space-y-3 max-h-96 overflow-y-auto">
-            {historyData.events.length === 0 && <p className="text-slate-500 text-center py-8">No history for this employee.</p>}
-            {historyData.events.map((ev) => (
-              <div key={ev.event_id} className="flex items-start gap-3 p-3 rounded-lg bg-slate-800 border border-slate-700">
+            {historyData.events?.length === 0 && (
+              <div className="py-8 text-center">
+                <History className="w-8 h-8 text-slate-700 mx-auto mb-2" />
+                <p className="text-slate-500 text-sm">No asset history for this employee.</p>
+              </div>
+            )}
+            {historyData.events?.map((ev) => (
+              <div key={`${ev.event_type}-${ev.event_id}`} className="flex items-start gap-3 p-3 rounded-lg bg-slate-800 border border-slate-700">
                 <StatusBadge status={ev.event_type} />
                 <div className="flex-1 min-w-0">
                   <p className="text-slate-200 text-sm font-medium">{ev.asset_name}</p>

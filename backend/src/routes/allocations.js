@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
-const { allocateAsset, getActiveAllocations } = require('../controllers/allocationController');
+const { allocateAsset, getActiveAllocations, deleteAllocation } = require('../controllers/allocationController');
 const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 
@@ -16,5 +16,7 @@ router.post('/',
   validate,
   allocateAsset
 );
+
+router.delete('/:id', auth, deleteAllocation);
 
 module.exports = router;

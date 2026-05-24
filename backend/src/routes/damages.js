@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
-const { reportDamage, getDamageReports } = require('../controllers/damageController');
+const { reportDamage, getDamageReports, deleteDamageReport, resolveDamageReport } = require('../controllers/damageController');
 const auth = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const upload = require('../middleware/upload');
@@ -19,5 +19,8 @@ router.post('/',
   validate,
   reportDamage
 );
+
+router.put('/:id/resolve', auth, resolveDamageReport);
+router.delete('/:id', auth, deleteDamageReport);
 
 module.exports = router;

@@ -6,10 +6,24 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
 import Modal from '../components/Modal';
 import { SeverityBadge, formatDateTime } from '../utils/helpers';
-import { AlertTriangle, Plus, ImageIcon } from 'lucide-react';
+import { AlertTriangle, Plus, ImageIcon, Trash2, CheckCircle, ShieldOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const SEVERITIES = ['low', 'medium', 'high', 'critical'];
+
+function EmptyState() {
+  return (
+    <div className="py-16 flex flex-col items-center justify-center gap-4">
+      <div className="w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center">
+        <ShieldOff className="w-8 h-8 text-slate-600" />
+      </div>
+      <div className="text-center">
+        <h3 className="text-slate-300 font-semibold">No damage reports</h3>
+        <p className="text-xs text-slate-500 mt-1">All assets are in good health. Report damage when it occurs.</p>
+      </div>
+    </div>
+  );
+}
 
 export default function DamageReports() {
   const [reports, setReports] = useState([]);
@@ -17,11 +31,16 @@ export default function DamageReports() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [page, setPage] = useState(1);
+  const [statusFilter, setStatusFilter] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [resolveTarget, setResolveTarget] = useState(null);
   const [assets, setAssets] = useState([]);
   const [form, setForm] = useState({ asset_id: '', description: '', severity: 'medium', photo: null });
   const [preview, setPreview] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [resolving, setResolving] = useState(false);
   const [formErrors, setFormErrors] = useState({});
 
   const fetchReports = useCallback(async (params) => {
@@ -34,14 +53,16 @@ export default function DamageReports() {
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetchReports({ page, limit: 10 }); }, [page, fetchReports]);
+  useEffect(() => {
+    fetchReports({ page, limit: 10, status: statusFilter || undefined });
+  }, [page, statusFilter, fetchReports]);
 
   const openModal = async () => {
     setModalOpen(true);
     setForm({ asset_id: '', description: '', severity: 'medium', photo: null });
     setPreview(null); setFormErrors({});
     try {
-      const res = await assetAPI.getAll({ limit: 200 });
+      const res = await assetAPI.getAll({ limit: 500 });
       setAssets(res.data);
     } catch { toast.error('Failed to load assets'); }
   };
@@ -74,18 +95,55 @@ export default function DamageReports() {
       await damageAPI.create(fd);
       toast.success('Damage report submitted');
       setModalOpen(false);
-      fetchReports({ page, limit: 10 });
+      fetchReports({ page, limit: 10, status: statusFilter || undefined });
     } catch (err) { toast.error(err.message); }
     finally { setSubmitting(false); }
   };
 
+  const handleResolve = async () => {
+    if (!resolveTarget) return;
+    setResolving(true);
+    try {
+      await damageAPI.resolve(resolveTarget.id);
+      toast.success('Damage report marked as resolved');
+      setResolveTarget(null);
+      fetchReports({ page, limit: 10, status: statusFilter || undefined });
+    } catch (err) { toast.error(err.message); }
+    finally { setResolving(false); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await damageAPI.delete(deleteTarget.id);
+      toast.success('Damage report deleted');
+      setDeleteTarget(null);
+      fetchReports({ page, limit: 10, status: statusFilter || undefined });
+    } catch (err) { toast.error(err.message); }
+    finally { setDeleting(false); }
+  };
+
   return (
     <div className="flex flex-col min-h-full">
-      <Navbar title="Damage Reports" subtitle="Track and report asset damage" />
+      <Navbar title="Damage Reports" subtitle="Track and resolve asset damage" />
       <div className="flex-1 p-6 space-y-4 animate-fade-in">
-        <div className="flex justify-end">
+        <div className="flex flex-wrap gap-3 items-center justify-between">
+          <div className="flex items-center gap-2">
+            {['', 'Unresolved', 'Resolved'].map(s => (
+              <button key={s} onClick={() => { setStatusFilter(s); setPage(1); }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                  statusFilter === s
+                    ? 'bg-slate-700 text-slate-100 border-slate-600'
+                    : 'bg-transparent text-slate-400 border-transparent hover:text-slate-200'
+                }`}>
+                {s === '' ? 'All Reports' : s}
+              </button>
+            ))}
+          </div>
           <button onClick={openModal} className="btn-danger"><Plus className="w-4 h-4" /> Report Damage</button>
         </div>
+
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -94,15 +152,17 @@ export default function DamageReports() {
                   <th className="px-4 py-3">Asset</th>
                   <th className="px-4 py-3">Severity</th>
                   <th className="px-4 py-3">Description</th>
+                  <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Photo</th>
                   <th className="px-4 py-3">Reported At</th>
+                  <th className="px-4 py-3">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {loading && <tr><td colSpan={5} className="py-12"><LoadingSpinner /></td></tr>}
-                {!loading && error && <tr><td colSpan={5}><ErrorMessage message={error} onRetry={() => fetchReports({ page })} /></td></tr>}
+                {loading && <tr><td colSpan={7} className="py-12"><LoadingSpinner /></td></tr>}
+                {!loading && error && <tr><td colSpan={7}><ErrorMessage message={error} onRetry={() => fetchReports({ page })} /></td></tr>}
                 {!loading && !error && reports.length === 0 && (
-                  <tr><td colSpan={5} className="py-12 text-center text-slate-500">No damage reports found.</td></tr>
+                  <tr><td colSpan={7}><EmptyState /></td></tr>
                 )}
                 {!loading && reports.map((r) => (
                   <tr key={r.id} className="table-row-hover">
@@ -110,16 +170,43 @@ export default function DamageReports() {
                       <p className="font-medium text-slate-200">{r.asset_name}</p>
                       <p className="text-xs text-slate-500">{r.serial_number}</p>
                     </td>
-                    <td className="px-4 py-3"><SeverityBadge severity={r.severity} /></td>
+                    <td className="px-4 py-3"><SeverityBadge severity={r.severity?.toLowerCase()} /></td>
                     <td className="px-4 py-3 text-slate-400 max-w-xs">
                       <span className="line-clamp-2 text-xs">{r.description}</span>
                     </td>
                     <td className="px-4 py-3">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${
+                        r.resolution_status === 'Resolved'
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                          : 'bg-red-500/10 text-red-400 border-red-500/20'
+                      }`}>
+                        {r.resolution_status === 'Resolved' ? <CheckCircle className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                        {r.resolution_status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
                       {r.photo_url
-                        ? <a href={`http://localhost:5000${r.photo_url}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-primary-400 hover:underline text-xs"><ImageIcon className="w-3.5 h-3.5" /> View</a>
-                        : <span className="text-slate-600">—</span>}
+                        ? <a href={`http://localhost:5000${r.photo_url}`} target="_blank" rel="noreferrer"
+                            className="flex items-center gap-1 text-primary-400 hover:underline text-xs">
+                            <ImageIcon className="w-3.5 h-3.5" /> View
+                          </a>
+                        : <span className="text-slate-700">—</span>}
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-500">{formatDateTime(r.created_at)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        {r.resolution_status === 'Unresolved' && (
+                          <button onClick={() => setResolveTarget(r)} title="Mark Resolved"
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors">
+                            <CheckCircle className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button onClick={() => setDeleteTarget(r)} title="Delete"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -129,11 +216,13 @@ export default function DamageReports() {
         </div>
       </div>
 
+      {/* Report Damage Modal */}
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="Report Asset Damage" size="lg">
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="label">Asset *</label>
-            <select className={`input ${formErrors.asset_id ? 'border-red-500' : ''}`} value={form.asset_id} onChange={e => setForm({ ...form, asset_id: e.target.value })}>
+            <select className={`input ${formErrors.asset_id ? 'border-red-500' : ''}`}
+              value={form.asset_id} onChange={e => setForm({ ...form, asset_id: e.target.value })}>
               <option value="">Select asset</option>
               {assets.map(a => <option key={a.id} value={a.id}>{a.asset_name} — {a.serial_number}</option>)}
             </select>
@@ -147,8 +236,9 @@ export default function DamageReports() {
               </select>
             </div>
             <div>
-              <label className="label">Photo (optional)</label>
-              <input type="file" accept="image/*" onChange={handleFile} className="input text-sm file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:bg-slate-700 file:text-slate-300 file:text-xs cursor-pointer" />
+              <label className="label">Photo <span className="text-slate-500 font-normal">(optional)</span></label>
+              <input type="file" accept="image/*" onChange={handleFile}
+                className="input text-sm file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:bg-slate-700 file:text-slate-300 file:text-xs cursor-pointer" />
             </div>
           </div>
           {preview && <img src={preview} alt="Preview" className="h-28 w-auto rounded-lg border border-slate-700 object-cover" />}
@@ -170,6 +260,44 @@ export default function DamageReports() {
             <button type="button" onClick={() => setModalOpen(false)} className="btn-secondary">Cancel</button>
           </div>
         </form>
+      </Modal>
+
+      {/* Resolve Confirm Modal */}
+      <Modal isOpen={!!resolveTarget} onClose={() => setResolveTarget(null)} title="Resolve Damage Report" size="sm">
+        <div className="space-y-4">
+          <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+            <p className="text-sm text-emerald-300">Mark this damage report as resolved. The asset will become available for allocation again.</p>
+          </div>
+          {resolveTarget && (
+            <p className="text-sm text-slate-300">Resolve report for <span className="font-semibold text-slate-100">{resolveTarget.asset_name}</span>?</p>
+          )}
+          <div className="flex gap-3">
+            <button onClick={handleResolve} disabled={resolving} className="btn-success flex-1 justify-center">
+              {resolving ? <span className="w-4 h-4 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+              {resolving ? 'Resolving...' : 'Mark Resolved'}
+            </button>
+            <button onClick={() => setResolveTarget(null)} className="btn-secondary">Cancel</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete Confirm Modal */}
+      <Modal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Delete Damage Report" size="sm">
+        <div className="space-y-4">
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+            <p className="text-sm text-red-300">This action permanently removes the damage report from the system.</p>
+          </div>
+          {deleteTarget && (
+            <p className="text-sm text-slate-300">Delete damage report for <span className="font-semibold text-slate-100">{deleteTarget.asset_name}</span>?</p>
+          )}
+          <div className="flex gap-3">
+            <button onClick={handleDelete} disabled={deleting} className="btn-danger flex-1 justify-center">
+              {deleting ? <span className="w-4 h-4 border-2 border-red-400/30 border-t-red-400 rounded-full animate-spin" /> : <Trash2 className="w-4 h-4" />}
+              {deleting ? 'Deleting...' : 'Delete Report'}
+            </button>
+            <button onClick={() => setDeleteTarget(null)} className="btn-secondary">Cancel</button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

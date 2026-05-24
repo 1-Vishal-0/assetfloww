@@ -1,57 +1,47 @@
 const { pool } = require('../config/database');
 
-// POST /api/damages — Report asset damage
+// POST /api/damages
 const reportDamage = async (req, res, next) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    const { asset_id, description, severity = 'Medium' } = req.body;
+    const { asset_id, description, severity = 'medium' } = req.body;
     const reported_by = req.user ? req.user.id : null;
     const photo_path = req.file ? `/uploads/${req.file.filename}` : null;
 
-    // Enforce backend validation: Description is required and must be >= 20 characters
     if (!description || description.trim().length < 20) {
       await connection.rollback();
-      return res.status(400).json({
-        success: false,
-        message: 'Damage description is required and must be at least 20 characters long.'
-      });
+      return res.status(400).json({ success: false, message: 'Damage description must be at least 20 characters.' });
     }
 
-    // Check asset exists
     const [assetRows] = await connection.query('SELECT id, brand, model, serial_number FROM assets WHERE id = ?', [asset_id]);
     if (assetRows.length === 0) {
       await connection.rollback();
       return res.status(404).json({ success: false, message: 'Asset not found.' });
     }
-
     const asset = assetRows[0];
 
-    // Insert into damage_reports
+    // Capitalise severity to match DB enum stored values
+    const severityStored = severity.charAt(0).toUpperCase() + severity.slice(1).toLowerCase();
+
     const [result] = await connection.query(
       `INSERT INTO damage_reports (asset_id, reported_by, severity, description, photo_path, resolution_status)
        VALUES (?, ?, ?, ?, ?, 'Unresolved')`,
-      [asset_id, reported_by, severity, description, photo_path]
+      [asset_id, reported_by, severityStored, description, photo_path]
     );
 
-    // Log Activity
     await connection.query(
       'INSERT INTO activity_logs (user_id, action, details) VALUES (?, ?, ?)',
-      [reported_by, 'REPORT_DAMAGE', `Reported ${severity} damage for asset ${asset.brand} ${asset.model} (SN: ${asset.serial_number})`]
+      [reported_by, 'REPORT_DAMAGE', `Reported ${severityStored} damage for ${asset.brand} ${asset.model} (SN: ${asset.serial_number})`]
     );
 
-    // Trigger Notification
     await connection.query(
       'INSERT INTO notifications (user_id, message) VALUES (NULL, ?)',
-      [`Damage Reported: ${asset.brand} ${asset.model} (SN: ${asset.serial_number}) reported with ${severity} severity: "${description.substring(0, 50)}..."`]
+      [`Damage Reported: ${asset.brand} ${asset.model} (SN: ${asset.serial_number}) — ${severityStored} severity.`]
     );
 
     await connection.commit();
-    res.status(201).json({
-      success: true,
-      message: 'Damage report submitted successfully.',
-      reportId: result.insertId
-    });
+    res.status(201).json({ success: true, message: 'Damage report submitted.', reportId: result.insertId });
   } catch (err) {
     await connection.rollback();
     next(err);
@@ -60,23 +50,25 @@ const reportDamage = async (req, res, next) => {
   }
 };
 
-// GET /api/damages — List damage reports
+// GET /api/damages
 const getDamageReports = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, severity } = req.query;
+    const { page = 1, limit = 10, severity, status } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    let baseQuery = `
+    let conditions = [];
+    const params = [];
+
+    if (severity) { conditions.push('dr.severity = ?'); params.push(severity); }
+    if (status)   { conditions.push('dr.resolution_status = ?'); params.push(status); }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const baseQuery = `
       SELECT
-        dr.id,
-        dr.asset_id,
-        dr.reported_by,
-        dr.severity,
-        dr.description,
-        dr.photo_path,
-        dr.photo_path AS photo_url,
-        dr.resolution_status,
-        dr.resolution_status AS status, -- for backward compatibility
+        dr.id, dr.asset_id, dr.severity, dr.description,
+        dr.photo_path, dr.photo_path AS photo_url,
+        dr.resolution_status, dr.resolution_status AS status,
         dr.created_at,
         CONCAT(a.brand, ' ', a.model) AS asset_name,
         a.serial_number,
@@ -86,39 +78,80 @@ const getDamageReports = async (req, res, next) => {
       JOIN assets a ON dr.asset_id = a.id
       LEFT JOIN categories c ON a.category_id = c.id
       LEFT JOIN users u ON dr.reported_by = u.id
+      ${whereClause}
     `;
 
-    const params = [];
-
-    if (severity) {
-      baseQuery += ` WHERE dr.severity = ?`;
-      params.push(severity);
-    }
-
-    const [countRows] = await pool.query(
-      `SELECT COUNT(*) AS total FROM (${baseQuery}) AS counts`,
-      params
-    );
-    const total = countRows[0].total;
-
-    const [rows] = await pool.query(
-      `${baseQuery} ORDER BY dr.created_at DESC LIMIT ? OFFSET ?`,
-      [...params, parseInt(limit), offset]
-    );
+    const [[{ total }]] = await pool.query(`SELECT COUNT(*) AS total FROM (${baseQuery}) AS c`, params);
+    const [rows] = await pool.query(`${baseQuery} ORDER BY dr.created_at DESC LIMIT ? OFFSET ?`, [...params, parseInt(limit), offset]);
 
     res.json({
       success: true,
       data: rows,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit)),
-      },
+      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) },
     });
+  } catch (err) { next(err); }
+};
+
+// PUT /api/damages/:id/resolve
+const resolveDamageReport = async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params;
+    const userId = req.user ? req.user.id : null;
+
+    const [existing] = await connection.query('SELECT dr.*, CONCAT(a.brand," ",a.model) AS asset_name FROM damage_reports dr JOIN assets a ON dr.asset_id=a.id WHERE dr.id=?', [id]);
+    if (existing.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: 'Damage report not found.' });
+    }
+
+    await connection.query(
+      `UPDATE damage_reports SET resolution_status = 'Resolved', updated_at = NOW() WHERE id = ?`, [id]
+    );
+    await connection.query(
+      'INSERT INTO activity_logs (user_id, action, details) VALUES (?, ?, ?)',
+      [userId, 'RESOLVE_DAMAGE', `Resolved damage report #${id} for ${existing[0].asset_name}`]
+    );
+
+    await connection.commit();
+    res.json({ success: true, message: 'Damage report resolved.' });
   } catch (err) {
+    await connection.rollback();
     next(err);
+  } finally {
+    connection.release();
   }
 };
 
-module.exports = { reportDamage, getDamageReports };
+// DELETE /api/damages/:id
+const deleteDamageReport = async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const { id } = req.params;
+    const userId = req.user ? req.user.id : null;
+
+    const [existing] = await connection.query('SELECT * FROM damage_reports WHERE id = ?', [id]);
+    if (existing.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: 'Damage report not found.' });
+    }
+
+    await connection.query('DELETE FROM damage_reports WHERE id = ?', [id]);
+    await connection.query(
+      'INSERT INTO activity_logs (user_id, action, details) VALUES (?, ?, ?)',
+      [userId, 'DELETE_DAMAGE_REPORT', `Deleted damage report #${id}`]
+    );
+
+    await connection.commit();
+    res.json({ success: true, message: 'Damage report deleted.' });
+  } catch (err) {
+    await connection.rollback();
+    next(err);
+  } finally {
+    connection.release();
+  }
+};
+
+module.exports = { reportDamage, getDamageReports, resolveDamageReport, deleteDamageReport };

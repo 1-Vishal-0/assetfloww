@@ -1,14 +1,32 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { historyAPI } from '../api';
 import Navbar from '../components/Navbar';
 import Pagination from '../components/Pagination';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
-import { StatusBadge, formatDateTime, debounce } from '../utils/helpers';
+import { StatusBadge, formatDateTime } from '../utils/helpers';
 import { History as HistoryIcon } from 'lucide-react';
 
-const EVENT_TYPES = ['all', 'allocated', 'returned', 'damaged', 'added'];
+const EVENT_TYPES = ['all', 'allocated', 'returned', 'damaged'];
+
+function EmptyState({ filter }) {
+  return (
+    <div className="py-16 flex flex-col items-center justify-center gap-4">
+      <div className="w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center">
+        <HistoryIcon className="w-8 h-8 text-slate-600" />
+      </div>
+      <div className="text-center">
+        <h3 className="text-slate-300 font-semibold">No events found</h3>
+        <p className="text-xs text-slate-500 mt-1">
+          {filter !== 'all'
+            ? `No "${filter}" events recorded yet. Events appear here as actions occur.`
+            : 'No activity yet. Events are recorded automatically as you allocate, return, or report damage.'}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export default function History() {
   const [searchParams] = useSearchParams();
@@ -39,10 +57,10 @@ export default function History() {
 
   return (
     <div className="flex flex-col min-h-full">
-      <Navbar title="Allocation History" subtitle="Complete event timeline" />
+      <Navbar title="Activity History" subtitle="Complete audit trail of all inventory events" />
       <div className="flex-1 p-6 space-y-4 animate-fade-in">
         <div className="flex flex-wrap gap-2 items-center">
-          <span className="text-sm text-slate-500">Filter by:</span>
+          <span className="text-sm text-slate-500">Filter:</span>
           {EVENT_TYPES.map(t => (
             <button
               key={t}
@@ -75,10 +93,10 @@ export default function History() {
                 {loading && <tr><td colSpan={6} className="py-12"><LoadingSpinner /></td></tr>}
                 {!loading && error && <tr><td colSpan={6}><ErrorMessage message={error} onRetry={() => fetchHistory({ page })} /></td></tr>}
                 {!loading && !error && events.length === 0 && (
-                  <tr><td colSpan={6} className="py-12 text-center text-slate-500">No events found.</td></tr>
+                  <tr><td colSpan={6}><EmptyState filter={eventFilter} /></td></tr>
                 )}
-                {!loading && events.map((ev) => (
-                  <tr key={ev.id} className="table-row-hover">
+                {!loading && events.map((ev, idx) => (
+                  <tr key={`${ev.event_type}-${ev.id ?? idx}`} className="table-row-hover">
                     <td className="px-4 py-3">
                       <p className="font-medium text-slate-200">{ev.asset_name}</p>
                       <p className="text-xs font-mono text-slate-500">{ev.serial_number}</p>
